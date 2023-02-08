@@ -90,12 +90,21 @@ Once you are done setting up the project, you can now start working with the MET
 
 1. Load the `data.table` (and the `dtplyr` and `dplyr` packages if you plan to work with those).
 
+```{r}
+library(data.table)
+library(dplyr)
+library(dtplyr)
+```
+
+
 2. Load the met data from https://github.com/JSC370/jsc370-2023/blob/main/labs/lab03/met_all.gz or  (Use https://raw.githubusercontent.com/JSC370/jsc370-2023/main/labs/lab03/met_all.gz to download programmatically), and also the station data. For the latter, you can use the code we used during lecture to pre-process the stations data:
 
-```{r stations-data, eval = FALSE}
+```{r stations-data}
 # Download the data
 stations <- fread("ftp://ftp.ncdc.noaa.gov/pub/data/noaa/isd-history.csv")
 stations[, USAF := as.integer(USAF)]
+
+dat <- fread("https://raw.githubusercontent.com/JSC370/jsc370-2023/main/labs/lab03/met_all.gz")
 
 # Dealing with NAs and 999999
 stations[, USAF   := fifelse(USAF == 999999, NA_integer_, USAF)]
@@ -115,13 +124,62 @@ stations <- stations[n == 1,][, n := NULL]
 
 3. Merge the data as we did during the lecture.
 
+```{r}
+df <- merge(
+  # Data
+  x = dat,
+  y = stations,
+  # List of variables to match
+  by.x = "USAFID",
+  by.y = "USAF",
+  # Which obs to keep?
+  all.x = TRUE,
+  all.y = FALSE
+ )
+```
+
+
 ## Question 1: Representative station for the US
 
 Across all weather stations, what is the median station in terms of temperature, wind speed, and atmospheric pressure? Look for the three weather stations that best represent continental US using the `quantile()` function. Do these three coincide?
 
 ```{r}
-
+summary(df)
 ```
+
+```{r}
+# First compute the average temperature, wind speed, and atmospheric pressure for each weather station
+df_means <- df %>% 
+  filter(! is.na(temp) & ! is.na(wind.sp) & ! is.na(atm.press)) %>%
+  group_by(USAFID) %>%
+  summarise(temperature = mean(temp),
+            wind_speed = mean(wind.sp),
+            pressure = mean(atm.press)) %>%
+  as.data.frame()
+```
+
+
+```{r}
+## Get station with median temperature
+median_temp_station <- df_means$USAFID[df_means$temp == quantile(df_means$temp, 0.5)]
+median_temp_station
+```
+
+```{r}
+## Get station with median wind speed
+median_wind_speed_station <- df_means$USAFID[df_means$wind_speed == quantile(df_means$wind_speed, 0.5)]
+median_wind_speed_station
+```
+```{r}
+## Get station with median atmospheric pressure
+median_pressure_station <- df_means$USAFID[df_means$pressure == quantile(df_means$pressure, 0.5)]
+median_pressure_station
+```
+
+The three stations that best represent the temperature, wind speed, and atmospheric pressure across continental US are 724106, 726070, and 726539 respectively.
+
+These three do not coincide. 
+
 
 Knit the document, commit your changes, and save it on GitHub. Don't forget to add `README.md` to the tree, the first time you render it.
 
