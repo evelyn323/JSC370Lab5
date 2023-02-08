@@ -1,9 +1,9 @@
 ---
 title: "Lab 05 - Data Wrangling"
 output: 
-  github_document: default
   tufte::tufte_html:
     css: style.css
+  github_document: default
 always_allow_html: true
 link-citations: yes
 ---
