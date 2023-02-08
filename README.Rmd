@@ -4,6 +4,7 @@ output:
   github_document: default
   tufte::tufte_html:
     css: style.css
+always_allow_html: true
 link-citations: yes
 ---
 
@@ -94,6 +95,9 @@ Once you are done setting up the project, you can now start working with the MET
 library(data.table)
 library(dplyr)
 library(dtplyr)
+library(leaflet)
+library(tidyverse)
+library(mgcv)
 ```
 
 
@@ -125,7 +129,7 @@ stations <- stations[n == 1,][, n := NULL]
 3. Merge the data as we did during the lecture.
 
 ```{r}
-df <- merge(
+met <- merge(
   # Data
   x = dat,
   y = stations,
@@ -136,6 +140,8 @@ df <- merge(
   all.x = TRUE,
   all.y = FALSE
  )
+
+met_lz <- lazy_dt(met, immutable = FALSE)
 ```
 
 
@@ -144,42 +150,52 @@ df <- merge(
 Across all weather stations, what is the median station in terms of temperature, wind speed, and atmospheric pressure? Look for the three weather stations that best represent continental US using the `quantile()` function. Do these three coincide?
 
 ```{r}
-summary(df)
-```
-
-```{r}
 # First compute the average temperature, wind speed, and atmospheric pressure for each weather station
-df_means <- df %>% 
-  filter(! is.na(temp) & ! is.na(wind.sp) & ! is.na(atm.press)) %>%
+met_avg_lz <- met_lz %>% 
   group_by(USAFID) %>%
-  summarise(temperature = mean(temp),
-            wind_speed = mean(wind.sp),
-            pressure = mean(atm.press)) %>%
+  summarise(temp = mean(temp, na.rm = TRUE),
+            wind.sp = mean(wind.sp, na.rm = TRUE),
+            atm.press = mean(atm.press, na.rm = TRUE)) %>%
   as.data.frame()
 ```
 
 
 ```{r}
-## Get station with median temperature
-median_temp_station <- df_means$USAFID[df_means$temp == quantile(df_means$temp, 0.5)]
-median_temp_station
+# Get the median values
+met_med_lz <- met_avg_lz %>%
+  summarise(across(
+    c(temp, wind.sp, atm.press),
+    function(x) quantile(x, 0.5, na.rm = TRUE)
+  ))
+
+met_med_lz
 ```
 
 ```{r}
-## Get station with median wind speed
-median_wind_speed_station <- df_means$USAFID[df_means$wind_speed == quantile(df_means$wind_speed, 0.5)]
-median_wind_speed_station
+# Get the stations
+temp_us_id <- met_avg_lz %>%
+  mutate(temp_diff = abs(temp - met_med_lz %>% pull(temp))) %>%
+  arrange(temp_diff) %>%
+  slice(1) %>%
+  pull(USAFID)
+
+wind.sp_us_id <- met_avg_lz %>%
+  mutate(wind.sp_diff = abs(wind.sp - met_med_lz %>% pull(wind.sp))) %>%
+  arrange(wind.sp_diff) %>%
+  slice(1) %>%
+  pull(USAFID)
+
+atm.press_us_id <- met_avg_lz %>%
+  mutate(atm.press_diff = abs(atm.press - met_med_lz %>% pull(atm.press))) %>%
+  arrange(atm.press_diff) %>%
+  slice(1) %>%
+  pull(USAFID)
+
+temp_us_id
+wind.sp_us_id
+atm.press_us_id
 ```
-```{r}
-## Get station with median atmospheric pressure
-median_pressure_station <- df_means$USAFID[df_means$pressure == quantile(df_means$pressure, 0.5)]
-median_pressure_station
-```
-
-The three stations that best represent the temperature, wind speed, and atmospheric pressure across continental US are 724106, 726070, and 726539 respectively.
-
-These three do not coincide. 
-
+The three stations are 720458, 720929, and 723200	 for temperature, wind speed, and atmospheric pressure respectively. These three do not coincide. 
 
 Knit the document, commit your changes, and save it on GitHub. Don't forget to add `README.md` to the tree, the first time you render it.
 
@@ -187,9 +203,72 @@ Knit the document, commit your changes, and save it on GitHub. Don't forget to a
 
 Just like the previous question, you are asked to identify what is the most representative, the median, station per state. This time, instead of looking at one variable at a time, look at the euclidean distance. If multiple stations show in the median, select the one located at the lowest latitude.
 
-```{r}
 
+```{r}
+# First compute the average temperature, wind speed, and atmospheric pressure for each weather station
+met_means_state <- met_lz %>% 
+  group_by(USAFID) %>%
+  summarise(temp = mean(temp, na.rm = TRUE),
+            wind.sp = mean(wind.sp, na.rm = TRUE),
+            atm.press = mean(atm.press, na.rm = TRUE),
+            state = STATE,
+            lon = lon,
+            lat = lat)
 ```
+
+euclid distance between each variable and the median of the variable
+
+
+```{r}
+# Compute the median temperature, wind speed, and atmospheric pressure for each state
+met_med_state <- met_means_state %>% 
+  group_by(state) %>%
+  summarise(across(
+    c(temp, wind.sp, atm.press),
+    function(x) quantile(x, 0.5, na.rm = TRUE)
+  ))
+```
+
+```{r}
+# Merge the two datasets
+met_means_med_state <- merge(
+  # Data
+  x = met_means_state,
+  y = met_med_state,
+  # List of variables to match
+  by.x = "state",
+  by.y = "state",
+  # Which obs to keep?
+  all.x = TRUE,
+  all.y = TRUE
+ )
+```
+
+```{r}
+# Compute the euclidean distance of each weather station
+euclidean <- function(a, b, c, d, e, f){
+  sqrt((a -  b)^2 + (c -  d)^2 + (e - f)^2)
+}
+
+met_means_med_state$euclid <- euclidean(
+  a = met_means_med_state$temp.x,
+  b = met_means_med_state$temp.y,
+  c = met_means_med_state$wind.sp.x,
+  d = met_means_med_state$wind.sp.y,
+  e = met_means_med_state$atm.press.x,
+  f = met_means_med_state$atm.press.y)
+```
+
+```{r}
+result_state <- met_means_med_state %>% 
+  group_by(state) %>%
+  slice(which.min(euclid))
+
+result_state
+# check for duplicates
+length(unique(result_state$state)) == nrow(result_state)
+```
+No duplicates
 
 Knit the doc and save it on GitHub.
 
@@ -197,8 +276,84 @@ Knit the doc and save it on GitHub.
 
 For each state, identify what is the station that is closest to the mid-point of the state. Combining these with the stations you identified in the previous question, use `leaflet()` to visualize all ~100 points in the same figure, applying different colors for those identified in this question.
 
-```{r}
 
+```{r}
+## Get the data necessary to answer the question 
+met_means_loc <- met_lz %>% 
+  group_by(USAFID) %>%
+  summarise(lon = mean(lon, na.rm = TRUE),
+            lat = mean(lat, na.rm = TRUE),
+            state = STATE)
+```
+
+
+```{r}
+## Obtain the midpoint of the state using the avg of the lat and lon of the stations
+met_med_loc <- met_means_loc %>% 
+  group_by(state) %>%
+  summarise(across(
+    c(lat, lon),
+    function(x) mean(x, na.rm = TRUE)
+  ))
+```
+
+```{r}
+# Merge the two datasets
+met_means_med_loc <- merge(
+  # Data
+  x = met_means_loc,
+  y = met_med_loc,
+  # List of variables to match
+  by.x = "state",
+  by.y = "state",
+  # Which obs to keep?
+  all.x = TRUE,
+  all.y = TRUE
+ )
+```
+
+```{r}
+# Compute the station closest to the midpoint
+euclidean <- function(a, b, c, d){
+  sqrt((a -  b)^2 + (c -  d)^2)
+}
+
+met_means_med_loc$euclid <- euclidean(
+  a = met_means_med_loc$lon.x,
+  b = met_means_med_loc$lon.y,
+  c = met_means_med_loc$lat.x,
+  d = met_means_med_loc$lat.y)
+
+result_loc <- met_means_med_loc %>% 
+  group_by(state) %>%
+  slice(which.min(euclid))
+
+result_loc
+```
+
+```{r}
+# Set color palette
+pal <- colorFactor(c("blue", "red"), c("Q2 Representative Station", "Q3 Midpoint Station"))
+
+# Make the plot
+result_loc %>% leaflet() |>
+  addProviderTiles('OpenStreetMap') |>
+  addCircleMarkers(lng = ~lon.x, 
+                   lat = ~lat.x, 
+                   fillColor = 'red', 
+                   weight = 0, 
+                   fillOpacity = 0.7, 
+                   radius = 10) |>
+  addCircleMarkers(lng = ~result_state$lon, 
+                   lat = ~result_state$lat, 
+                   fillColor = 'blue', 
+                   weight = 0, 
+                   fillOpacity = 0.7, 
+                   radius = 10) |>
+  addLegend('bottomleft', 
+            pal = pal, 
+            values = c("Q2 Representative Station", "Q3 Midpoint Station"), 
+            title = "Relative Humidity (%)")
 ```
 
 Knit the doc and save it on GitHub.
@@ -213,8 +368,26 @@ Start by computing the states' average temperature. Use that measurement to clas
 - Mid: temp >= 20 and temp < 25
 - High: temp >= 25
 
-```{r}
 
+```{r}
+# compute average temperature level
+met_state_temp <- met_lz %>% 
+  group_by(STATE) %>%
+  summarise(na_temp = sum(is.na(temp)),
+            temp = mean(temp, na.rm = TRUE),
+            wind.sp = mean(wind.sp, na.rm = TRUE),
+            atm.press = mean(atm.press, na.rm = TRUE),
+            num_stations = length(unique(USAFID, na.rm = TRUE)),
+            entries = n())
+
+# 
+met_state_temp$avg_temp_level <- case_when(
+    met_state_temp %>% pull(temp)< 20 ~ "low",
+    met_state_temp %>% pull(temp) >= 20 & met_state_temp %>% pull(temp) < 35 ~ "Mid",
+    met_state_temp %>% pull(temp) >= 25 ~ "High"
+  )
+
+met_state_temp
 ```
 
 Once you are done with that, you can compute the following:
@@ -228,7 +401,17 @@ Once you are done with that, you can compute the following:
 All by the levels described before.
 
 ```{r}
-
+met_state_temp %>% 
+  group_by(factor(met_state_temp$avg_temp_level)) %>%
+  summarise(
+    num_entries = sum(entries),
+    num_NA = sum(na_temp),
+    num_stations = sum(num_stations),
+    num_states = length(unique(STATE)),
+    mean_temp = mean(temp, na.rm = TRUE),
+    mean_wind.sp = mean(wind.sp, na.rm = TRUE),
+    mean_atm.press = mean(atm.press, na.rm = TRUE)
+  )
 ```
 
 Knit the document, commit your changes, and push them to GitHub. 
@@ -240,8 +423,38 @@ Let's practice running regression models with smooth functions on X. We need the
 
 - using your data with the median values per station, examine the association between median temperature (y) and median wind speed (x). Create a scatterplot of the two variables using ggplot2. Add both a linear regression line and a smooth line.
 
+```{r}
+# Data with median values per station
+met_meds <- met_lz %>% 
+  group_by(USAFID) %>%
+  summarise(temp = quantile(temp, 0.5, na.rm = TRUE),
+            wind.sp = quantile(wind.sp, 0.5, na.rm = TRUE),
+            atm.press = quantile(atm.press, 0.5, na.rm = TRUE)) %>%
+  as.data.frame()
+```
+
+```{r}
+# Scatterplot of median temperature (y) and median wind speed (x)
+met_meds %>% filter(!is.na(temp), !is.na(wind.sp)) %>%
+  ggplot( aes(x = wind.sp, y = temp)) + 
+  geom_point() +
+  geom_smooth(method = "lm", color = "red") + 
+  geom_smooth()
+```
+
+
 - fit both a linear model and a spline model (use `gam()` with a cubic regression spline on wind speed). Summarize and plot the results from the models and interpret which model is the best fit and why.
 
 ```{r}
+# Linear model
+lmodel <- lm(met_meds$temp ~ met_meds$wind.sp)
+summary(lmodel)
+plot(lmodel)
 
+# Spline model
+smodel <- gam(met_meds$temp~s(met_meds$wind.sp, bs = "cr", k = 10))
+summary(smodel)
+plot(smodel)
 ```
+Notice that the p-value for both fitted models are very small. However, for the spline model, the p-value for the wind speed predictor is even smaller, perhaps indicating more significance. Thus the spline model is better. 
+
